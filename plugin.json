@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codex-project-orchestrator",
+  "version": "0.2.0",
+  "description": "Local Codex thread orchestration toolkit with persistent checkpoints and verified handoff.",
+  "author": {
+    "name": "Demon0524"
+  },
+  "repository": "https://github.com/Demon0524/codex-project-orchestrator",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Project Orchestrator",
+        "shortDescription": "独立对话调度、进度持久化与主控交接",
+        "longDescription": "本地 Codex App Server 桥接工具与项目协作技能，支持真实聊天创建、结果读取、后续任务及检查点接管。",
+        "developerName": "Demon0524",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": "使用 project-orchestrator 工具包检查本机连接，在项目中创建独立执行对话并验证接管。"
+      }
+    }
+  }
+}

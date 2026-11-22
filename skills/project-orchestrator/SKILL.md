@@ -28,6 +28,17 @@ description: 在持续项目中担任主控，按需分派子代理，维护可�
 
 工具和授权齐备后实际调用，不只输出分工计划或反复要求已有授权。子代理或新聊天创建成功后，记录工具返回的真实 ID、任务及状态；对独立聊天使用相应等待/读取工具观察结果，验收后按依赖发送下一步。结果由主控读取即可，不强制要求执行聊天发消息回主控；反向发消息仍需相应用户授权。
 
+## 工具包后端
+
+若发现 `orchestrator_health` 等本工具包接口，先调用健康检查。后端只访问运行它的本地 Codex 主目录，不会接入云端 durable 对话。不要混用桌面 `list_projects` 的旧 ID 与本工具包 `orchestrator_projects` 返回的真实 App Server 项目 ID。
+
+- `orchestrator_projects` → `orchestrator_create` → `orchestrator_wait` / `orchestrator_read` → `orchestrator_send` 完成独立聊天执行闭环。
+- 创建与发送必须使用稳定、每次操作唯一的 `request_id`。重试同一操作沿用同一个 ID 和参数，返回 creating/created/sending 等未完成状态时先检查已有真实聊天，不另造 ID 重复创建。
+- 写入任务须在已有用户授权内明确选择 `workspace-write`；默认 `read-only`。审批或输入请求不会自动批准，出现 needs_attention 或 failed 时停止并处理真实原因。
+- 主控交接先保存检查点，再调用 `orchestrator_handoff` 创建只做接管核验的后继对话。使用 `orchestrator_handoff_status` 检查接受标记和文件摘要；accepted 后才向后继发送已授权目标，旧主控停止派发。注册表只是协作记录，不能强行终止旧主控。
+- MCP 断开时私有 stdio 后端的执行可能中断；共享 daemon 后端是否可用以健康检查为准。工具包不自动开启远程访问或后台服务，不提供精确 token 阈值的自动轮换。
+- 不将 standalone Skill 安装视为 MCP 已安装。新会话里必须实际发现并验证这些工具。
+
 ## 按需调度
 
 - 当前主控负责目标、依赖、任务边界、结果验收及后续调度；子代理只接收完成其任务所需的上下文。
