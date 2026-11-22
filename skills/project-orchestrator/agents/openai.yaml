@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目主控与交接"
+  short_description: "统筹项目主控与子代理分工，持久保存进度、决策及验收证据并完成跨对话交接"
+  default_prompt: "使用 $project-orchestrator 接手当前项目，读取既有进度，按需分派子代理并持续更新检查点。"
