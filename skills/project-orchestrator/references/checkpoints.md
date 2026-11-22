@@ -53,3 +53,24 @@
 验收条件：[可验证标准]
 沿用已记录的有效约束，按需分派子代理并维护进度。不要从旧摘要推断已经通过的验证或额外操作权限。
 ```
+
+## 工具包结构化检查点 v1
+
+`orchestrator_checkpoint_save(request_id, state)` 使用以下完整字段。数组可为空，但字段不能省略。状态经过上游验证、常见凭据过滤后保存为不可变引用；不要放入秘密。
+
+```json
+{
+  "schema_version": 1,
+  "goal": "本轮可验证目标",
+  "constraints_preferences": ["保留现有工作区修改"],
+  "progress": {"done": [], "in_progress": [], "pending": []},
+  "key_decisions": [],
+  "rejected_attempts": [],
+  "verification": [],
+  "critical_context": [],
+  "uncertainties": [],
+  "next_steps": ["接手后第一项具体行动"]
+}
+```
+
+使用 `checkpoint_ref` 发起交接时，后继核验的是保存的不可变快照。接受、激活是两个步骤：`handoff_status` 确认绑定核验轮次后，`handoff_activate` 再次检查并开始后续任务。不把创建成功、原始摘要或中间评论当成接管证据。

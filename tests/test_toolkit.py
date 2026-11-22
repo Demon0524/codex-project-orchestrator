@@ -18,8 +18,9 @@ class FakeBackend:
         self.usage = {}
         self.turns = []
         self.fail = None
+        self.cwd = None
 
-    def call(self, method, params=None):
+    def call(self, method, params=None, timeout=None):
         self.calls.append((method, params))
         if method == self.fail:
             raise RpcError("Uncertain transport failure")
@@ -28,7 +29,7 @@ class FakeBackend:
         if method == "turn/start":
             return {"turn": {"id": "real-turn-1"}}
         if method == "thread/read":
-            return {"thread": {"id": params["threadId"]}}
+            return {"thread": {"id": params["threadId"], "cwd": self.cwd, "projectId": None}}
         if method == "thread/turns/list":
             return {"data": self.turns}
         return {}
@@ -40,6 +41,7 @@ class ToolkitTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.b = FakeBackend()
+        self.b.cwd = str(self.root)
         self.t = Toolkit(self.b, State(self.root / "state"))
 
     def create(self, **overrides):
@@ -92,28 +94,14 @@ class ToolkitTests(unittest.TestCase):
     def test_handoff_requires_marker_and_unchanged_checkpoint(self):
         checkpoint = self.root / "HANDOFF.md"
         checkpoint.write_text("Verified checkpoint")
-        record = self.t.handoff("h1", "source", str(self.root), str(checkpoint), "Continue")
-        self.b.turns = [{"status": "completed", "items": [{"type": "agentMessage", "text": "Ready"}]}]
+        record = self.t.handoff("h1", "source", str(self.root), "Continue", checkpoint=str(checkpoint))
+        self.b.turns = [{"id": record["verification_turn_id"], "status": "completed", "items": [{"type": "agentMessage", "phase": "final_answer", "text": "Ready"}]}]
         self.assertEqual(self.t.handoff_status("h1")["status"], "pending")
         self.b.turns[0]["items"][0]["text"] = "HANDOFF_ACCEPTED:" + record["id"]
         checkpoint.write_text("Changed underneath successor")
         self.assertEqual(self.t.handoff_status("h1")["status"], "pending")
         checkpoint.write_text("Verified checkpoint")
         self.assertEqual(self.t.handoff_status("h1")["status"], "accepted")
-
-    def test_approvals_fail_closed(self):
-        b = Backend.__new__(Backend)
-        b.proc = type("Process", (), {"stdout": io.StringIO(json.dumps({
-            "id": 123, "method": "item/commandExecution/requestApproval", "params": {"threadId": "t1"}
-        }) + "\n")})()
-        b.pending, b.attention, b.usage = {}, {}, {}
-        b.lock = threading.Lock()
-        replies = []
-        b._write = replies.append
-        b._read()
-        self.assertIn("error", replies[0])
-        self.assertNotIn("result", replies[0])
-        self.assertIn("t1", b.attention)
 
     def test_mcp_discovery_and_bad_input_need_no_backend(self):
         server = Path(__file__).resolve().parents[1] / "server/orchestrator.py"
@@ -124,7 +112,7 @@ class ToolkitTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True, timeout=5)
         messages = [json.loads(line) for line in result.stdout.splitlines()]
         self.assertIn("error", messages[0])
-        self.assertEqual(len(messages[1]["result"]["tools"]), 8)
+        self.assertEqual(len(messages[1]["result"]["tools"]), 17)
         hints = {t["name"]: t["annotations"]["readOnlyHint"] for t in messages[1]["result"]["tools"]}
         self.assertTrue(hints["orchestrator_health"])
         self.assertFalse(hints["orchestrator_create"])

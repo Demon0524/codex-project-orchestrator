@@ -1,6 +1,6 @@
 {
   "name": "codex-project-orchestrator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local Codex thread orchestration toolkit with persistent checkpoints and verified handoff.",
   "author": {
     "name": "Demon0524"

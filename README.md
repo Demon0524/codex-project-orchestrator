@@ -2,15 +2,16 @@
 
 项目主控、独立执行聊天、子代理分工、进度持久化和检查点交接的本地工具包。
 
-**0.2.0 包含真正的 MCP 对话工具，不再只有 Skill。** 通过本机 Codex App Server 创建持久的独立聊天，读取完成结果，发送后续任务，并验证后继主控接管。
+**0.3.0 包含真正的 MCP 对话工具，不再只有 Skill。** 通过本机 Codex App Server 创建持久的独立聊天，读取完成结果，发送后续任务，并验证后继主控接管。
 
 ## 组成
 
 - `skills/project-orchestrator/`：中文协作 Skill 与检查点约定。
-- `server/orchestrator.py`：仅依赖 Python 标准库的 stdio MCP 服务。
+- `server/orchestrator.py`：stdio MCP 入口；`rpc_client.py` 管理协议与进程，`workflow.py` 管理状态和调度。运行仅依赖 Python 标准库。
 - `scripts/install.py`：通过 Codex 官方 CLI 注册 MCP，并安装/更新同名 Skill。
 - `plugin.json`、`mcp.json`：Agent Plugins 1.0 插件描述；`.codex-plugin/` 为兼容描述。
-- `tests/`：重复请求、审批边界、交接一致性和 MCP 协议测试。
+- `tests/`：协议假进程、重复请求、审批边界、交接一致性、崩溃恢复和 MCP 协议测试。
+- `THIRD_PARTY_NOTICES.md`、`licenses/`：两个 MIT 上游的固定版本、改动说明和完整许可。
 
 ## 运行条件
 
@@ -52,7 +53,16 @@ python3 scripts/install.py --update
 | `orchestrator_wait` | 最多等待 45 秒，返回完成、运行中或需处理状态 |
 | `orchestrator_send` | 向工具包创建的聊天发送后续任务 |
 | `orchestrator_handoff` | 根据已有检查点创建后继主控，只进行接管核验 |
-| `orchestrator_handoff_status` | 核对接受标记、检查点摘要和主控记录后确认接管 |
+| `orchestrator_handoff_status` | 仅接受绑定核验轮次的已完成最终回答，并核对检查点与主控记录 |
+| `orchestrator_wait_many` | 以同一个截止时间收集多个聊天，支持 any / all |
+| `orchestrator_reconcile` | 对账原连接中的迟到创建或续派响应，不自动重发 |
+| `orchestrator_resume_create` | 原参数指纹匹配后，显式补完已知创建、尚未发出首轮的聊天 |
+| `orchestrator_checkpoint_save` | 验证并脱敏结构化状态，保存不可变检查点 |
+| `orchestrator_checkpoint_read` | 校验并读取检查点引用，输出有界 Markdown |
+| `orchestrator_handoff_reconcile` | 找回创建阶段的已知后继和核验轮次 |
+| `orchestrator_handoff_resume` | 从持久原任务显式恢复创建阶段，不重复创建 |
+| `orchestrator_handoff_activate` | 重新检查检查点与主控状态，幂等激活后继 |
+| `orchestrator_handoff_activation_reconcile` | 独立对账已发出的激活轮次，不重新激活 |
 
 项目 ID 使用本工具包返回值。桌面连接器的旧项目 ID 不一定与 App Server 的真实 ID 相同，不要混用。
 
@@ -73,15 +83,23 @@ python3 scripts/install.py --update
 
 ## 主控交接
 
-1. 主控保存项目检查点，并把现有执行任务停在明确位置或记录运行状态。
-2. 调用 `orchestrator_handoff`，指定 source_thread_id、项目根目录、检查点文件和目标。文件必须在项目内，源对话必须能被本机后端读取。
-3. 后继独立聊天读取指令、检查点和工作区；核验轮次不开展项目工作。
-4. 等待后调用 `orchestrator_handoff_status`。只有已完成轮次返回匹配的接受标记、检查点未变且原主控记录未发生竞争，才记 accepted。
-5. accepted 后，向后继发送已获用户授权的具体目标；旧主控停止派发。只创建成功仍属于待接管，不冒充交接完成。
+1. 主控保存项目进度。可传项目内的 Markdown 检查点文件，也可调用 `orchestrator_checkpoint_save` 保存结构化状态，获得不可变 `checkpoint://...` 引用。
+2. 调用 `orchestrator_handoff`，提供源聊天、cwd、目标和 checkpoint / checkpoint_ref 中的一项。源聊天的目录与项目身份必须匹配。原始文件会生成脱敏快照，源文件摘要也保留用于二次检查。
+3. 后继独立聊天读取项目指令、不可变检查点和工作区；核验轮次不开展项目工作。
+4. 等待后调用 `orchestrator_handoff_status`。只有创建时绑定的核验 turn 已完成，且最终回答以正确接受标记结尾、检查点未变、主控记录无竞争，才记 accepted。
+5. 调用 `orchestrator_handoff_activate`：检查点与主控记录再次核对后，激活请求和发送 reservation 在同一事务写入，再开始后继任务。相同交接 ID 不会发送第二次激活。
+6. 后继继续在授权范围内工作。旧主控停止派发；后续 `create` / `send` 使用返回的 successor ID 作为 `coordinator_id`。
+
+阶段日志：`prepared → creating → verification_pending → accepted → activation_sending → active`。出现不确定结果时保留 blocked 和已知 ID。
+
+- 创建/续派超时后先用同一个 ID 调用 `orchestrator_reconcile`。晚到响应只在原 Backend 连接中可对账；重启后的 RPC ID 不会误匹配旧连接。
+- 已知 thread 已创建而首轮尚未发出，可用完全相同输入调用 `orchestrator_resume_create`；曾发出但结果不明的 turn 不会被重发。
+- 交接创建恢复使用 `handoff_reconcile` / `handoff_resume`；激活恢复必须使用 `handoff_activation_reconcile`，两条恢复路径分离。
+- 如果连接已经丢失且无法确认结果，保持待处理，不盲目创建或发送。旧版 0.2 交接缺少绑定核验轮次，需要人工重新核验，不会被自动激活。
 
 默认新聊天使用 `read-only`；写任务只有在用户已经授权时才明确选择 `workspace-write`。后继执行也需要写权限时，创建交接时指定该模式，核验轮次仍只做读取。发送后续任务不会提升权限。
 
-主控注册表是本工具包内的交接记录，不是对所有 Codex 对话的全局锁，也不会强行终止旧主控。接管标记证明代理声明已核验，不能代替主控对关键产物的验收。
+主控注册表是本工具包内的交接记录。记录生效后，工具包拒绝旧的或缺失的 `coordinator_id` 发起新调度；该 ID 是调用者提供的协作标识，不是强身份认证，也不是对所有 Codex 对话的全局锁，不会强行终止旧主控。接管标记证明代理声明已核验，不能代替主控对关键产物的验收。
 
 ## 生命周期、权限与适用范围
 
@@ -92,13 +110,15 @@ python3 scripts/install.py --update
 - 支持读写任务，但不提供权限绕过、全盘授权、自动发布、自动推送或业务部署授权。
 - 不连接云端 durable 主机，不修复它的离线状态，也不猜测该主机的公网入口。
 - token 数据仅为当前后端连接收到的事件，可能为空；**没有精确阈值自动轮换或永久后台调度器**。自动换主控由具备这些工具的运行中主控在阶段检查点调用。
-- 本工具包的状态默认位于用户 `~/.local/state/codex-project-orchestrator`，仅保存操作指纹、聊天 ID、交接路径、目标和状态，文件权限为 0600。不要把状态目录上传仓库。
+- 本工具包的状态默认位于用户 `~/.local/state/codex-project-orchestrator`，保存操作指纹、聊天 ID、交接日志、原核验任务和结构化检查点，文件权限为 0600。检查点的常见凭据过滤为尽力检测，不保证识别所有秘密。不要把状态目录上传仓库。
 
 ## 验证
 
 ```bash
 python3 server/orchestrator.py --health
 python3 -m unittest discover -s tests -v
+# 明确启用后会创建验收聊天并调用模型
+python3 scripts/acceptance.py --live
 ```
 
 已在本地真实后端完成：新建持久聊天 → 读取返回结果 → 续派第二轮 → 创建后继 → 核验检查点 → 确认接管；桌面原生读取工具也能读到新建的同一聊天 ID。独立对话也已发现并实际调用注册后的 MCP `orchestrator_health`，调用完成且只读标记正确。这些验收不代表其他主机、版本或当前云端会话已接入。
@@ -112,3 +132,18 @@ codex mcp remove project-orchestrator
 ```
 
 该命令只移除 MCP 注册，不删除项目、历史聊天或检查点。同名 Skill 可另行手动移除。
+
+## 上游合并范围
+
+- **session-handoff**：实际复用其结构化状态验证和 Markdown 渲染；在本项目中接入不可变检查点、尽力脱敏与阶段日志。未安装其 CLI launcher、跨客户端迁移或 telemetry。
+- **codex-app-server-mcp**：将有界迟到响应跟踪和进程生命周期处理移植到 Python 后端；未捆绑整套 TypeScript 服务，也未引入其 Node.js 依赖。
+
+固定提交、原文件、改动和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 打包
+
+```bash
+python3 scripts/package.py
+```
+
+打包器只包含发布源码、技能、测试和许可，排除 `.git`、运行状态、验收目录和缓存。更改源码后必须重新打包。
